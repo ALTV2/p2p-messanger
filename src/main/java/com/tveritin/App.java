@@ -17,6 +17,7 @@ public class App
     //запускам вторую потом первую, получилось сначала словить коннект из 2 в 1
     //Доделать историю переписки, очистить код
     //написать тесты
+    //добавление контакта, когда он написал первый
 
 //    public static void main(String[] args) throws ConnectionException {
 //        System.out.println("Start");

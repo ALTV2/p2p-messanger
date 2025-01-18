@@ -54,19 +54,28 @@ public class Chat {
         return (s, req, h) -> {
             ByteBuf content = req.content();
             String output = content.getCharSequence(0, content.readableBytes(), Charset.defaultCharset()).toString();
-            String senderPeerId = req.headers().get("X-Sender-PeerId");
-            var optContact = profile.getContacts().stream().filter(contact -> contact.getOriginPeerId().equals(senderPeerId))
-                    .findFirst().get(); // если option is empty нужно создавать новый контакт
 
+            String senderPeerId = req.headers().get("X-Sender-PeerId");
+            String senderUsername = req.headers().get("X-Sender-Username");
+
+            var optContact = profile.getContacts().stream().filter(contact -> contact.getOriginPeerId().equals(senderPeerId))
+                    .findFirst(); // если option is empty нужно создавать новый контакт
+            Contact contact;
+            if (optContact.isPresent()) {
+                contact = optContact.get();
+            } else {
+                contact = new Contact(senderUsername, "Some info", senderPeerId, null, null, new Dialog(new ArrayList<>()));
+                profile.getContacts().add(contact);
+            }
             var receiveTime = LocalDateTime.now();
             var message = new Message(output, receiveTime);
 
-            if (optContact.getUsername().equals(openDialogUserName)) {
+            if (contact.getUsername().equals(openDialogUserName)) {
                 System.out.println(receiveTime + ": " + output);
                 message.setNew(false);
             } else message.setNew(true);
 
-            optContact.getDialog().getMessages().add(message);
+            contact.getDialog().getMessages().add(message);
 
             FullHttpResponse replyOk = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.buffer(0));
             replyOk.headers().set(HttpHeaderNames.CONTENT_LENGTH, 0);
@@ -186,12 +195,19 @@ public class Chat {
 //        Thread.sleep(2000);
         AtomicBoolean ifFirstNewMessage = new AtomicBoolean(true);
         contact.getDialog().getMessages().forEach(message -> {
-            if (message.isNew() && ifFirstNewMessage.get()){
+            if (ifFirstNewMessage.get() && message.isNew()){
                 ifFirstNewMessage.set(false);
                 System.out.println("||============== New UnRead Message =============||");
                 System.out.println("\\/===============================================\\/");
             }
-            System.out.println(message.getLocalDateTime() + ": " + message.getPayload());
+            if (message.isNew()) {
+                message.setNew(false);
+            }
+            if (message.isMine()) {
+                System.out.println(message.getLocalDateTime() + ": " + message.getPayload());
+            } else {
+                System.out.println("\t\t\t\t\t\t" + message.getPayload() + ": " + message.getLocalDateTime());
+            }
         });
         Scanner in = new Scanner(System.in);
         byte[] payload;
@@ -210,8 +226,15 @@ public class Chat {
             FullHttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", Unpooled.copiedBuffer(msg));
             httpRequest.headers().set(HttpHeaderNames.CONTENT_LENGTH, msg.length);
             httpRequest.headers().set("X-Sender-PeerId", node.getPeerId().toBase58());
+            httpRequest.headers().set("X-Sender-Username", profile.getUsername());
+
             HttpProtocol.HttpController proxier = p2pHttpBinding.dial(node, targetPeerId, addressesToDial).getController().join();
             proxier.send(httpRequest.retain()).join().release();
+
+            var newMyMessage = new Message(strPayload, LocalDateTime.now());
+            newMyMessage.setNew(false);
+            newMyMessage.setMine(true);
+            contact.getDialog().getMessages().add(newMyMessage);
         }
     }
 
