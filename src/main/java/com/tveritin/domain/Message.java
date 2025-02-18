@@ -9,5 +9,5 @@ public class Message {
     private final String payload;
     private final LocalDateTime localDateTime;
     private boolean isMine = false;
-    private boolean isNew = false;
+    private boolean isNew = true;
 }

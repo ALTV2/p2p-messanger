@@ -11,7 +11,6 @@ import java.util.Random;
 public class App 
 {
     public static void main(String[] args) throws ConnectionException {
-        System.out.println("Start");
         Chat chat = new Chat(Integer.parseInt(args[0]));
         Runtime.getRuntime().addShutdownHook(new Thread(chat::stop));
     }

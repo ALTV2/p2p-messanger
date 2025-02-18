@@ -1,9 +1,9 @@
 package com.tveritin;
 
 import com.tveritin.domain.Contact;
-import com.tveritin.domain.Dialog;
 import com.tveritin.domain.Message;
 import com.tveritin.domain.Profile;
+import com.tveritin.service.ProfileService;
 import io.ipfs.multiaddr.MultiAddress;
 import io.ipfs.multihash.Multihash;
 import io.libp2p.core.Host;
@@ -13,6 +13,7 @@ import io.libp2p.core.multiformats.Multiaddr;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
+import org.jetbrains.annotations.NotNull;
 import org.peergos.BlockRequestAuthoriser;
 import org.peergos.EmbeddedIpfs;
 import org.peergos.HostBuilder;
@@ -24,7 +25,6 @@ import org.peergos.net.ConnectionException;
 import org.peergos.protocol.dht.RamRecordStore;
 import org.peergos.protocol.dht.RecordStore;
 import org.peergos.protocol.http.HttpProtocol;
-import org.peergos.util.Version;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -41,41 +41,50 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Использует библиотеку libp2p и HTTP-протокол для общения.
  */
 public class Chat {
-    static private Profile profile;
+    public static final String X_SENDER_PEER_ID = "X-Sender-PeerId";
+    private static final String X_SENDER_USERNAME = "X-Sender-Username";
+    public static final String EMPTY = "Empty";
+    public static final String BACK_COMMAND = ">back";
+    public static final String TABS_FOR_RECIVE_MESSAGE = "\t\t\t\t\t\t";
+    private static ProfileService profileService;
     private EmbeddedIpfs embeddedIpfs;
-    private Integer portNumber;
     static private String openDialogUserName;
 
     /**
      * Этот метод создает обработчик HTTP-запросов, который принимает сообщение и возвращает ответ "OK".
+     *
      * @return обработчик HTTP-запросов.
      */
     static HttpProtocol.HttpRequestProcessor proxyHandler() {
         return (s, req, h) -> {
             ByteBuf content = req.content();
-            String output = content.getCharSequence(0, content.readableBytes(), Charset.defaultCharset()).toString();
-            String senderPeerId = req.headers().get("X-Sender-PeerId");
+            String messageContent = content.getCharSequence(0, content.readableBytes(), Charset.defaultCharset()).toString();
+            String senderPeerId = req.headers().get(X_SENDER_PEER_ID);
+            String senderUsername = req.headers().get(X_SENDER_USERNAME);
 
-            var optContact = profile.getContacts().stream().filter(contact -> contact.getOriginPeerId().equals(senderPeerId))
-                    .findFirst(); // если option is empty нужно создавать новый контакт
-            Contact contact;
+            var optContact = profileService.findContactByPeerId(senderPeerId);
+
             if (optContact.isPresent()) {
-                contact = optContact.get();
+                Contact contact = optContact.get();
 
                 var receiveTime = LocalDateTime.now();
-                var message = new Message(output, receiveTime);
+                var message = new Message(messageContent, receiveTime);
 
                 if (contact.getUsername().equals(openDialogUserName)) {
-                    System.out.println(receiveTime + ": " + output);
+                    printRecivedMessage(message);
                     message.setNew(false);
-                } else message.setNew(true);
+                }
 
-                contact.getDialog().getMessages().add(message);
+                profileService.addMessageToDialog(contact, message);
             } else {
-                System.out.println("Unknow message from peerId: " + senderPeerId + ", please add to contact or block.");
+                profileService.addNewContactWithMessage(senderUsername, senderPeerId, messageContent);
+                //todo добавить blackList + коллизии с одинаковыми username
             }
 
-            FullHttpResponse replyOk = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.buffer(0));
+            FullHttpResponse replyOk = new DefaultFullHttpResponse(
+                    HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.buffer(0)
+            );
+
             replyOk.headers().set(HttpHeaderNames.CONTENT_LENGTH, 0);
             h.accept(replyOk.retain());
         };
@@ -83,25 +92,19 @@ public class Chat {
 
     /**
      * Конструктор класса Chat создает локальный узел p2p-сети и запускает процесс общения.
-     * @throws ConnectionException в случае возникновения ошибки при установлении соединения.
      */
-    public Chat(Integer portNumber) throws ConnectionException {
-        this.portNumber = portNumber;
-        RecordStore recordStore = new RamRecordStore(); // Хранилище записей в оперативной памяти
-        Blockstore blockStore = new RamBlockstore(); // Блок-хранилище в оперативной памяти
+    public Chat(Integer portNumber) {
+        RecordStore recordStore = new RamRecordStore();
+        Blockstore blockStore = new RamBlockstore();
 
-        System.out.println("Starting Chat version: " + Version.parse("0.0.1"));
-//        int portNumber = 10000 + new Random().nextInt(50000); // Случайный порт для соединения
-        List<MultiAddress> swarmAddresses = List.of(new MultiAddress("/ip6/::/tcp/" + portNumber)); // Адрес для связи
-//        List<MultiAddress> swarmAddresses = List.of(new MultiAddress("/ip4/127.0.0.1/tcp/" + portNumber)); // IPv4); // Адрес для связи
-
-        List<MultiAddress> bootstrapNodes = new ArrayList<>(Config.defaultBootstrapNodes);
-        bootstrapNodes.add(new MultiAddress("/ip6/::/tcp/10003/p2p/12D3KooWHyypwophXqg1vSvfYLPvVCEBYiPKKQcmkWfBAiBNpC81"));
+        System.out.println("Starting chat node on port - " + portNumber);
+        List<MultiAddress> swarmAddresses = List.of(new MultiAddress("/ip6/::/tcp/" + portNumber));
+        List<MultiAddress> bootstrapNodes = getBootStrapAddresses();
 
         HostBuilder builder = new HostBuilder().generateIdentity(); // Генерация идентификации узла
         PrivKey privKey = builder.getPrivateKey(); // Приватный ключ узла
         PeerId peerId = builder.getPeerId(); // Идентификатор узла
-        System.out.println("My PeerId:" + peerId.toBase58());
+        System.out.println("My Chat - PeerId:" + peerId.toBase58());
 
         IdentitySection identitySection = new IdentitySection(privKey.bytes(), peerId); // Секция идентификации
         BlockRequestAuthoriser authoriser = (c, p, a) -> CompletableFuture.completedFuture(true); // Авторизация запросов
@@ -111,72 +114,44 @@ public class Chat {
                 swarmAddresses,
                 bootstrapNodes,
                 identitySection,
-                authoriser, Optional.of(Chat.proxyHandler()));
+                authoriser,
+                Optional.of(Chat.proxyHandler())
+        );
+
         embeddedIpfs.start();
 
         Scanner in = new Scanner(System.in);
 
-        setProfileInfo(in, peerId);
+        fillProfileInfo(in, peerId); // тут запрашиваем информацию о владельце ноды
 
-        // 1 - добавить контакт
-        // 2 - показать список контактов
-        // 3 + " " + username открыть диалог
         boolean workFlag = true;
+        // '1'              - добавить контакт
+        // '2'              - показать список контактов
+        // '3 <username>'   - открыть диалог
+        // '4'              - остановка работы мессенджера
         while (workFlag) {
             System.out.println("Enter command:");
             String command = in.nextLine().trim();
-            if (command.startsWith("3")) {
-                var usernameForOpeningChat = command.split(" ")[1];
-                // Запуск чата с указанным узлом
-                var contactForOpeningChat = profile.getContacts().stream().filter( contact -> contact.getUsername().equals(usernameForOpeningChat))
-                                .findFirst();
-                try {
-                    Contact contact = contactForOpeningChat.get();
-                    String peerIdStr = contact.getOriginPeerId();
 
-                    Multihash targetNodeId = Multihash.fromBase58(peerIdStr);
-                    PeerId targetPeerId = PeerId.fromBase58(targetNodeId.toBase58());
-
-                    runChat(embeddedIpfs.node, embeddedIpfs.p2pHttp.get(), contact, targetPeerId,
-                            EmbeddedIpfs.getAddresses(embeddedIpfs.node, embeddedIpfs.dht, targetNodeId));
-                } catch (Exception ex) {
-                    System.out.println("catch exception try again: " + ex.getMessage());
-                }
+            if (command.startsWith("3")) {  // Запуск чата с указанным узлом
+                openChatWithUser(command);
             } else if (Integer.parseInt(command) == 1) {
-                System.out.println("Adding contact:");
-
-                System.out.println("Enter username:");
-                String contactUsername = in.nextLine().trim();
-
-                System.out.println("Enter PeerId of other node:");
-                String peerIdStr = in.nextLine().trim();
-                if (peerIdStr.length() == 0) {
-                    throw new IllegalArgumentException("Invalid PeerId");
-                }
-                Multihash targetNodeId = Multihash.fromBase58(peerIdStr);
-                PeerId targetPeerId = PeerId.fromBase58(targetNodeId.toBase58());
-                var newContact = new Contact(contactUsername, "someInfo", peerIdStr, targetPeerId, targetNodeId, new Dialog(new ArrayList<>()));
-                profile.getContacts().add(newContact);
-                System.out.println("Adding contact is finished.");
-            } else if (Integer.parseInt(command) == 2){
-                profile.getContacts().forEach(contact -> {
-                    System.out.println(contact.getUsername());
-                });
-            } else if (Integer.parseInt(command) == 4){
+                addNewContact(in);
+            } else if (Integer.parseInt(command) == 2) {
+                showContacts();
+            } else if (Integer.parseInt(command) == 4) {
                 workFlag = false;
                 stop();
             }
         }
     }
 
-    private void setProfileInfo(Scanner in, PeerId peerId) {
-        System.out.println("Enter you username:");
-        String username = in.nextLine().trim();
-
-        System.out.println("Enter you info:");
-        String info = in.nextLine().trim();
-
-        profile = new Profile(username, info, peerId.toBase58(), new ArrayList<>());
+    private static void showContacts() {
+        profileService.getContacts().forEach(
+                contact -> {
+                    System.out.println("    - " + contact.getUsername());
+                }
+        );
     }
 
     /**
@@ -184,56 +159,17 @@ public class Chat {
      *
      * @param node            узел, через который отправляются сообщения.
      * @param p2pHttpBinding  биндинг для http-протокола.
-     * @param contact    идентификатор целевого узла.
+     * @param contact         идентификатор целевого узла.
      * @param addressesToDial адреса для соединения с целевым узлом.
      */
     public void runChat(Host node, HttpProtocol.Binding p2pHttpBinding, Contact contact, PeerId targetPeerId, Multiaddr[] addressesToDial) throws InterruptedException {
-        System.out.println("Opening chat with " + contact.getUsername());
+        System.out.println("<<< Opening chat with " + contact.getUsername() + " >>>");
         openDialogUserName = contact.getUsername();
 
-//        Thread.sleep(2000);
-        AtomicBoolean ifFirstNewMessage = new AtomicBoolean(true);
-        contact.getDialog().getMessages().forEach(message -> {
-            if (ifFirstNewMessage.get() && message.isNew()){
-                ifFirstNewMessage.set(false);
-                System.out.println("||============== New UnRead Message =============||");
-                System.out.println("\\/===============================================\\/");
-            }
-            if (message.isNew()) {
-                message.setNew(false);
-            }
-            if (message.isMine()) {
-                System.out.println(message.getLocalDateTime() + ": " + message.getPayload());
-            } else {
-                System.out.println("\t\t\t\t\t\t" + message.getPayload() + ": " + message.getLocalDateTime());
-            }
-        });
-        Scanner in = new Scanner(System.in);
-        byte[] payload;
-        boolean goBack = false;
-        while (!goBack) {
-            payload = in.nextLine().trim().getBytes();
+        showAlreadyReciveMessages(contact);
+        realTimeChatting(node, p2pHttpBinding, contact, targetPeerId, addressesToDial);
 
-            String strPayload = new String(payload, StandardCharsets. UTF_8);
-            if (strPayload.equals(">back")) {
-                goBack = true;
-                continue;
-            }
-
-            byte[] msg = payload;
-
-            FullHttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", Unpooled.copiedBuffer(msg));
-            httpRequest.headers().set(HttpHeaderNames.CONTENT_LENGTH, msg.length);
-            httpRequest.headers().set("X-Sender-PeerId", node.getPeerId().toBase58());
-
-            HttpProtocol.HttpController proxier = p2pHttpBinding.dial(node, targetPeerId, addressesToDial).getController().join();
-            proxier.send(httpRequest.retain()).join().release();
-
-            var newMyMessage = new Message(strPayload, LocalDateTime.now());
-            newMyMessage.setNew(false);
-            newMyMessage.setMine(true);
-            contact.getDialog().getMessages().add(newMyMessage);
-        }
+        openDialogUserName = EMPTY;
     }
 
     public void stop() {
@@ -244,6 +180,124 @@ public class Chat {
             } catch (Exception e) {
                 System.err.println("Error while stopping node: " + e.getMessage());
             }
+        }
+    }
+
+    private void fillProfileInfo(Scanner in, PeerId peerId) {
+        System.out.println("Enter you username:");
+        String username = in.nextLine().trim();
+
+        var profile = new Profile(username, "info", peerId.toBase58(), new ArrayList<>());
+        profileService = new ProfileService(profile);
+    }
+
+    @NotNull
+    private static List<MultiAddress> getBootStrapAddresses() {
+        List<MultiAddress> bootstrapNodes = new ArrayList<>(Config.defaultBootstrapNodes);
+        bootstrapNodes.add(new MultiAddress("/ip6/::/tcp/10003/p2p/12D3KooWAkcb8qzZFe38gD3GjAuZQdhrBYpC9ZsTszNPohFzztoq"));
+        return bootstrapNodes;
+    }
+
+    private void openChatWithUser(String command) {
+        var usernameForOpeningChat = command.split(" ")[1];
+        var contactOpt = profileService.findContactByUsername(usernameForOpeningChat);
+
+        if (contactOpt.isPresent()) {
+            try {
+                Contact contact = contactOpt.get();
+
+                Multihash targetNodeId = Multihash.fromBase58(contact.getOriginPeerId());
+                PeerId targetPeerId = PeerId.fromBase58(targetNodeId.toBase58());
+
+                runChat(embeddedIpfs.node, embeddedIpfs.p2pHttp.get(), contact, targetPeerId,
+                        EmbeddedIpfs.getAddresses(embeddedIpfs.node, embeddedIpfs.dht, targetNodeId));
+            } catch (Exception ex) {
+                System.out.println("Catch exception try again: " + ex.getMessage());
+            }
+        } else {
+            System.out.println("Cant find contact with this username: " + usernameForOpeningChat);
+        }
+    }
+
+    private static void addNewContact(Scanner in) {
+        System.out.println("<<< Adding contact >>>");
+
+        System.out.println("Enter username:");
+        String contactUsername = in.nextLine().trim();
+
+        System.out.println("Enter PeerId of other node:");
+        String peerIdStr = in.nextLine().trim();
+
+        if (peerIdStr.length() == 0) {
+            throw new IllegalArgumentException("Invalid PeerId");
+        }
+
+        profileService.addNewContact(contactUsername, peerIdStr);
+        System.out.println("Adding contact is finished.");
+    }
+
+    private static void showAlreadyReciveMessages(Contact contact) {
+        AtomicBoolean isFirstNewMessage = new AtomicBoolean(true);
+        contact.getDialog().getMessages().forEach(message -> {
+            if (isFirstNewMessage.get() && message.isNew()) {
+                isFirstNewMessage.set(false);
+                showUnreadedMessageBanner();
+            }
+
+            if (message.isNew()) {
+                message.setNew(false);
+            }
+
+            if (message.isMine()) {
+                printMyMessage(message);
+            } else {
+                printRecivedMessage(message);
+            }
+
+        });
+    }
+
+    private static void printRecivedMessage(Message message) {
+        System.out.println(TABS_FOR_RECIVE_MESSAGE + message.getPayload() + ": " + message.getLocalDateTime());
+    }
+
+    private static void printMyMessage(Message message) {
+        System.out.println(message.getLocalDateTime() + ": " + message.getPayload());
+    }
+
+    private static void showUnreadedMessageBanner() {
+        System.out.println("||============== New UnRead Message =============||");
+        System.out.println("\\/===============================================\\/");
+    }
+
+    private static void realTimeChatting(Host node, HttpProtocol.Binding p2pHttpBinding, Contact contact, PeerId targetPeerId, Multiaddr[] addressesToDial) {
+        Scanner in = new Scanner(System.in);
+        byte[] payload;
+        boolean goBack = false;
+        while (!goBack) {
+            payload = in.nextLine().trim().getBytes();
+
+            String strPayload = new String(payload, StandardCharsets.UTF_8);
+            if (strPayload.equals(BACK_COMMAND)) {
+                goBack = true;
+                continue;
+            }
+
+            byte[] msg = payload;
+
+            FullHttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", Unpooled.copiedBuffer(msg));
+            httpRequest.headers().set(HttpHeaderNames.CONTENT_LENGTH, msg.length);
+            httpRequest.headers().set(X_SENDER_PEER_ID, node.getPeerId().toBase58());
+            httpRequest.headers().set(X_SENDER_USERNAME, profileService.getUsername());
+
+            HttpProtocol.HttpController proxier = p2pHttpBinding.dial(node, targetPeerId, addressesToDial).getController().join();
+            proxier.send(httpRequest.retain()).join().release();
+
+            var newMyMessage = new Message(strPayload, LocalDateTime.now());
+            newMyMessage.setNew(false);
+            newMyMessage.setMine(true);
+
+            profileService.addMessageToDialog(contact, newMyMessage);
         }
     }
 }
