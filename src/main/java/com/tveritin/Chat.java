@@ -54,28 +54,26 @@ public class Chat {
         return (s, req, h) -> {
             ByteBuf content = req.content();
             String output = content.getCharSequence(0, content.readableBytes(), Charset.defaultCharset()).toString();
-
             String senderPeerId = req.headers().get("X-Sender-PeerId");
-            String senderUsername = req.headers().get("X-Sender-Username");
 
             var optContact = profile.getContacts().stream().filter(contact -> contact.getOriginPeerId().equals(senderPeerId))
                     .findFirst(); // если option is empty нужно создавать новый контакт
             Contact contact;
             if (optContact.isPresent()) {
                 contact = optContact.get();
+
+                var receiveTime = LocalDateTime.now();
+                var message = new Message(output, receiveTime);
+
+                if (contact.getUsername().equals(openDialogUserName)) {
+                    System.out.println(receiveTime + ": " + output);
+                    message.setNew(false);
+                } else message.setNew(true);
+
+                contact.getDialog().getMessages().add(message);
             } else {
-                contact = new Contact(senderUsername, "Some info", senderPeerId, null, null, new Dialog(new ArrayList<>()));
-                profile.getContacts().add(contact);
+                System.out.println("Unknow message from peerId: " + senderPeerId + ", please add to contact or block.");
             }
-            var receiveTime = LocalDateTime.now();
-            var message = new Message(output, receiveTime);
-
-            if (contact.getUsername().equals(openDialogUserName)) {
-                System.out.println(receiveTime + ": " + output);
-                message.setNew(false);
-            } else message.setNew(true);
-
-            contact.getDialog().getMessages().add(message);
 
             FullHttpResponse replyOk = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.buffer(0));
             replyOk.headers().set(HttpHeaderNames.CONTENT_LENGTH, 0);
@@ -98,6 +96,7 @@ public class Chat {
 //        List<MultiAddress> swarmAddresses = List.of(new MultiAddress("/ip4/127.0.0.1/tcp/" + portNumber)); // IPv4); // Адрес для связи
 
         List<MultiAddress> bootstrapNodes = new ArrayList<>(Config.defaultBootstrapNodes);
+        bootstrapNodes.add(new MultiAddress("/ip6/::/tcp/10003/p2p/12D3KooWHyypwophXqg1vSvfYLPvVCEBYiPKKQcmkWfBAiBNpC81"));
 
         HostBuilder builder = new HostBuilder().generateIdentity(); // Генерация идентификации узла
         PrivKey privKey = builder.getPrivateKey(); // Приватный ключ узла
@@ -226,7 +225,6 @@ public class Chat {
             FullHttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", Unpooled.copiedBuffer(msg));
             httpRequest.headers().set(HttpHeaderNames.CONTENT_LENGTH, msg.length);
             httpRequest.headers().set("X-Sender-PeerId", node.getPeerId().toBase58());
-            httpRequest.headers().set("X-Sender-Username", profile.getUsername());
 
             HttpProtocol.HttpController proxier = p2pHttpBinding.dial(node, targetPeerId, addressesToDial).getController().join();
             proxier.send(httpRequest.retain()).join().release();

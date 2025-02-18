@@ -2,17 +2,23 @@ package com.tveritin;
 
 import io.ipfs.multiaddr.MultiAddress;
 import io.ipfs.multihash.Multihash;
-import io.libp2p.core.*;
+import io.libp2p.core.Host;
+import io.libp2p.core.PeerId;
 import io.libp2p.core.crypto.PrivKey;
 import io.libp2p.core.multiformats.Multiaddr;
-import io.netty.buffer.*;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.peergos.BlockRequestAuthoriser;
-import org.peergos.*;
-import org.peergos.blockstore.*;
-import org.peergos.config.*;
+import org.peergos.EmbeddedIpfs;
+import org.peergos.HostBuilder;
+import org.peergos.blockstore.Blockstore;
+import org.peergos.blockstore.RamBlockstore;
+import org.peergos.config.Config;
+import org.peergos.config.IdentitySection;
 import org.peergos.net.ConnectionException;
-import org.peergos.protocol.dht.*;
+import org.peergos.protocol.dht.RamRecordStore;
+import org.peergos.protocol.dht.RecordStore;
 import org.peergos.protocol.http.HttpProtocol;
 import org.peergos.util.Version;
 
@@ -20,7 +26,7 @@ import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
-public class DefoultChat {
+public class InProgressChat {
     private EmbeddedIpfs embeddedIpfs;
 
     private static HttpProtocol.HttpRequestProcessor proxyHandler() {
@@ -33,14 +39,15 @@ public class DefoultChat {
             h.accept(replyOk.retain());
         };
     }
-    public DefoultChat() throws ConnectionException {
+    public InProgressChat(int portNumber) throws ConnectionException {
         RecordStore recordStore = new RamRecordStore();
         Blockstore blockStore = new RamBlockstore();
 
         System.out.println("Starting Chat version: " + Version.parse("0.0.1"));
-        int portNumber = 10000 + new Random().nextInt(50000);
         List<MultiAddress> swarmAddresses = List.of(new MultiAddress("/ip6/::/tcp/" + portNumber));
-        List<MultiAddress> bootstrapNodes = List.of(new MultiAddress("/ip6/::/tcp/53026/p2p/12D3KooWCiWhDRkkmCoPrUzQtzSCYGA8zJ1QYVvJQnvZHpcJyxAg"));
+//        List<MultiAddress> bootstrapNodes = new ArrayList<>(Config.defaultBootstrapNodes);
+
+        List<MultiAddress> bootstrapNodes = List.of(new MultiAddress("/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"));
 
         HostBuilder builder = new HostBuilder().generateIdentity();
         PrivKey privKey = builder.getPrivateKey();
@@ -53,7 +60,7 @@ public class DefoultChat {
                 swarmAddresses,
                 bootstrapNodes,
                 identitySection,
-                authoriser, Optional.of(DefoultChat.proxyHandler()));
+                authoriser, Optional.of(Chat.proxyHandler()));
         embeddedIpfs.start();
         System.out.println("Enter PeerId of other node:");
         Scanner in = new Scanner(System.in);
@@ -76,8 +83,5 @@ public class DefoultChat {
             HttpProtocol.HttpController proxier = p2pHttpBinding.dial(node, targetPeerId, addressesToDial).getController().join();
             proxier.send(httpRequest.retain()).join().release();
         }
-    }
-    public static void main(String[] args) throws ConnectionException {
-        new DefoultChat();
     }
 }
