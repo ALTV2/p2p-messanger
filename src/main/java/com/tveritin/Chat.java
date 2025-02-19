@@ -46,8 +46,8 @@ public class Chat {
     public static final String EMPTY = "Empty";
     public static final String BACK_COMMAND = ">back";
     public static final String TABS_FOR_RECIVE_MESSAGE = "\t\t\t\t\t\t";
-    private static ProfileService profileService;
-    private EmbeddedIpfs embeddedIpfs;
+    protected static ProfileService profileService;
+    EmbeddedIpfs embeddedIpfs;
     static private String openDialogUserName;
 
     /**
@@ -146,7 +146,7 @@ public class Chat {
         }
     }
 
-    private static void showContacts() {
+    protected static void showContacts() {
         profileService.getContacts().forEach(
                 contact -> {
                     System.out.println("    - " + contact.getUsername());
@@ -162,7 +162,7 @@ public class Chat {
      * @param contact         идентификатор целевого узла.
      * @param addressesToDial адреса для соединения с целевым узлом.
      */
-    public void runChat(Host node, HttpProtocol.Binding p2pHttpBinding, Contact contact, PeerId targetPeerId, Multiaddr[] addressesToDial) throws InterruptedException {
+    protected void runChat(Host node, HttpProtocol.Binding p2pHttpBinding, Contact contact, PeerId targetPeerId, Multiaddr[] addressesToDial) throws InterruptedException {
         System.out.println("<<< Opening chat with " + contact.getUsername() + " >>>");
         openDialogUserName = contact.getUsername();
 
@@ -183,7 +183,7 @@ public class Chat {
         }
     }
 
-    private void fillProfileInfo(Scanner in, PeerId peerId) {
+    protected void fillProfileInfo(Scanner in, PeerId peerId) {
         System.out.println("Enter you username:");
         String username = in.nextLine().trim();
 
@@ -192,13 +192,13 @@ public class Chat {
     }
 
     @NotNull
-    private static List<MultiAddress> getBootStrapAddresses() {
+    protected static List<MultiAddress> getBootStrapAddresses() {
         List<MultiAddress> bootstrapNodes = new ArrayList<>(Config.defaultBootstrapNodes);
         bootstrapNodes.add(new MultiAddress("/ip6/::/tcp/10003/p2p/12D3KooWAkcb8qzZFe38gD3GjAuZQdhrBYpC9ZsTszNPohFzztoq"));
         return bootstrapNodes;
     }
 
-    private void openChatWithUser(String command) {
+    protected void openChatWithUser(String command) {
         var usernameForOpeningChat = command.split(" ")[1];
         var contactOpt = profileService.findContactByUsername(usernameForOpeningChat);
 
@@ -219,7 +219,7 @@ public class Chat {
         }
     }
 
-    private static void addNewContact(Scanner in) {
+    protected static void addNewContact(Scanner in) {
         System.out.println("<<< Adding contact >>>");
 
         System.out.println("Enter username:");
@@ -236,7 +236,7 @@ public class Chat {
         System.out.println("Adding contact is finished.");
     }
 
-    private static void showAlreadyReciveMessages(Contact contact) {
+    protected static void showAlreadyReciveMessages(Contact contact) {
         AtomicBoolean isFirstNewMessage = new AtomicBoolean(true);
         contact.getDialog().getMessages().forEach(message -> {
             if (isFirstNewMessage.get() && message.isNew()) {
